@@ -35,6 +35,8 @@ export interface BusinessScene {
   description: string;
   documentType: string;
   sampleImage: string;
+  requiredDocsNotice: string[];
+  templateTips: string;
   fields: Record<string, FieldItem>;
 }
 

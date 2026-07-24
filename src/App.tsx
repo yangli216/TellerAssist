@@ -163,6 +163,7 @@ export const App: React.FC = () => {
           onResolveConflict={handleResolveConflict}
           workMode={workMode}
           onSubmit={handleSubmit}
+          currentScene={sampleScenes[currentSceneId]}
         />
       </main>
 

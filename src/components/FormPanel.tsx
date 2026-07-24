@@ -5,21 +5,24 @@ import {
   XCircle, 
   Copy, 
   Check, 
-  Send, 
+  Zap, 
+  Send,
   Info,
-  Edit3,
-  Zap
+  FileCheck2,
+  AlertCircle,
+  Edit3
 } from 'lucide-react';
-import { FieldItem, WorkMode, FieldStatus } from '../types/business';
+import { FieldItem, WorkMode, FieldStatus, BusinessScene } from '../types/business';
 
 interface FormPanelProps {
   fields: Record<string, FieldItem>;
   activeFieldId: string | null;
-  onFieldSelect: (fieldId: string) => void;
+  onFieldSelect: (fieldId: string | null) => void;
   onFieldChange: (fieldId: string, newValue: string) => void;
   onResolveConflict: (fieldId: string, acceptedValue: string) => void;
   workMode: WorkMode;
   onSubmit: () => void;
+  currentScene?: BusinessScene;
 }
 
 export const FormPanel: React.FC<FormPanelProps> = ({
@@ -30,6 +33,7 @@ export const FormPanel: React.FC<FormPanelProps> = ({
   onResolveConflict,
   workMode,
   onSubmit,
+  currentScene
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -37,7 +41,7 @@ export const FormPanel: React.FC<FormPanelProps> = ({
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
+    setTimeout(() => setCopiedId(null), 1800);
   };
 
   const getStatusBadge = (status: FieldStatus) => {
@@ -45,7 +49,7 @@ export const FormPanel: React.FC<FormPanelProps> = ({
       case 'PASSED':
         return <span className="badge badge-passed"><CheckCircle2 size={12} />已验证</span>;
       case 'REVIEW':
-        return <span className="badge badge-review"><AlertTriangle size={12} />需确认</span>;
+        return <span className="badge badge-review"><AlertTriangle size={12} />待确认</span>;
       case 'CONFLICT':
         return <span className="badge badge-conflict"><XCircle size={12} />冲突待核</span>;
       default:
@@ -54,8 +58,6 @@ export const FormPanel: React.FC<FormPanelProps> = ({
   };
 
   const conflictCount = Object.values(fields).filter((f) => f.status === 'CONFLICT').length;
-  const reviewCount = Object.values(fields).filter((f) => f.status === 'REVIEW').length;
-  const passCount = Object.values(fields).filter((f) => f.status === 'PASSED').length;
 
   return (
     <div style={{
@@ -89,15 +91,20 @@ export const FormPanel: React.FC<FormPanelProps> = ({
 
         {/* 极速一键填单或核对统计 */}
         {workMode === 'RECOGNITION' ? (
-          <button className="btn btn-primary" onClick={onSubmit}>
+          <button className="btn btn-primary" onClick={onSubmit} disabled={Object.keys(fields).length === 0}>
             <Zap size={16} />
             一键自动预填至柜面系统
           </button>
         ) : (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <span className="badge badge-passed">通过: {passCount}</span>
-            {reviewCount > 0 && <span className="badge badge-review">待确认: {reviewCount}</span>}
-            {conflictCount > 0 && <span className="badge badge-conflict">冲突: {conflictCount}</span>}
+            <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', backgroundColor: 'rgba(16,185,129,0.15)', color: '#10b981', fontWeight: 600 }}>
+              通过: {Object.values(fields).filter(f => f.status === 'PASSED').length}
+            </span>
+            {conflictCount > 0 && (
+              <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600 }}>
+                冲突: {conflictCount}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -113,35 +120,85 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         backgroundColor: 'var(--bg-app)'
       }}>
         {Object.keys(fields).length === 0 ? (
+          /* 详细的材料扫入指南与防错防混淆说明卡 */
           <div style={{
-            flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            textAlign: 'center',
-            color: 'var(--text-muted)',
-            padding: '2rem'
+            gap: '1.25rem',
+            maxWidth: '560px',
+            margin: '0 auto',
+            width: '100%'
           }}>
+            {/* 顶栏提示卡片 */}
             <div style={{
-              width: '56px',
-              height: '56px',
-              borderRadius: '50%',
+              padding: '1.25rem',
+              borderRadius: '10px',
               backgroundColor: 'var(--bg-card)',
               border: '1px solid var(--border-color)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: '1rem'
+              boxShadow: 'var(--shadow-sm)'
             }}>
-              <Info size={28} color="var(--text-secondary)" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.75rem' }}>
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '6px',
+                  backgroundColor: 'var(--accent-light)',
+                  color: 'var(--accent-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <FileCheck2 size={18} />
+                </div>
+                <div>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0 }}>
+                    当前选择业务：{currentScene?.title || '对公业务处理'}
+                  </h4>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    所需凭证分类：{currentScene?.documentType}
+                  </p>
+                </div>
+              </div>
+
+              {/* 必备凭证清单 Checkbox 防错 */}
+              <div style={{
+                backgroundColor: 'var(--bg-app)',
+                padding: '0.875rem 1rem',
+                borderRadius: '8px',
+                marginBottom: '0.875rem',
+                border: '1px solid var(--border-color)'
+              }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                  <AlertCircle size={14} color="#3b82f6" />
+                  防错指南：请确认高拍仪已放妥以下凭证 (避免放错图片)
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {(currentScene?.requiredDocsNotice || [
+                    '《企业营业执照》正本或副本原件 (带二维码)',
+                    '《单位撤销银行结算账户申请书》 (盖公章)',
+                    '法定代表人及经办人身份证件原件'
+                  ]).map((doc, idx) => (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <span style={{ color: '#10b981', fontWeight: 'bold' }}>✓</span>
+                      <span>{doc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 样张放置提示 */}
+              <div style={{
+                fontSize: '0.75rem',
+                color: 'var(--text-muted)',
+                lineHeight: 1.5,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.375rem'
+              }}>
+                <Info size={14} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <span><b>对齐样张提示：</b>{currentScene?.templateTips || '请将材料平铺于扫描光标中央，保证文字正面朝上无遮挡。'}</span>
+              </div>
             </div>
-            <h4 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.375rem' }}>
-              暂无已解析的对公字段数据
-            </h4>
-            <p style={{ fontSize: '0.8rem', maxWidth: '320px', lineHeight: 1.5 }}>
-              点击上方<b>【高拍仪抓拍 / 重扫描】</b>或拖入材料照片，纯本地 OCR 引擎将自动提取并校验数据。
-            </p>
           </div>
         ) : Object.values(fields).map((field) => {
           const isActive = activeFieldId === field.id;
