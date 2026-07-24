@@ -1,0 +1,62 @@
+name: "Build & Release Desktop App"
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: ''
+          - platform: 'macos-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'yarn'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile || yarn install
+
+      - name: Build Tauri Application & Create Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v1.0.0
+          releaseName: '智晓通 TellerAssist v1.0.0 Release'
+          releaseBody: |
+            ## 智晓通 (TellerAssist) v1.0.0 桌面端
+            - 零外部依赖，纯本地离线 OCR 与确定性规则提取引擎
+            - 支持对公账户销户、执照更新与网银变更三大高频柜面场景
+            - 包含图形 BBox 反查定位、数据碰撞与红黄绿合规状态指示
+            - 标准银行对公 JSON 报文受控受审导出闭环
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

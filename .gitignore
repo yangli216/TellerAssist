@@ -1,0 +1,30 @@
+# Node & Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing & Logs
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build & Bundles
+dist/
+dist-ssr/
+*.local
+
+# Tauri Rust Target
+src-tauri/target/
+
+# System Files
+.DS_Store
+*.suo
+*.ntvsca
+*.njsproj
+*.sln
+*.sw?
+
+# IDE Configs
+.idea/
+.vscode/
