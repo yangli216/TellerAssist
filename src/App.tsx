@@ -103,7 +103,8 @@ export const App: React.FC = () => {
     
     const ocrRes = await processLocalImageOcr(newSrc, currentSceneId);
     setFields(ocrRes.fields);
-    showToast('success', '纯本地离线 OCR 提取成功，已生成标注框与可信存证');
+    setActiveFieldId(Object.keys(ocrRes.fields)[0] || null);
+    showToast('success', '纯本地离线 OCR 提取成功，已生成全量标注框与可信存证');
   };
 
   const handleSubmit = () => {
