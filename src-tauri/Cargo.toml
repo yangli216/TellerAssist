@@ -1,6 +1,6 @@
 [package]
 name = "teller-assist"
-version = "1.0.0"
+version = "1.0.1"
 description = "智晓通 - 对公业务可信多模态智能填单助手"
 authors = ["Baidu/AGY Team"]
 edition = "2021"

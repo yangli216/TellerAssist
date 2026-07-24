@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Settings, Bot, Cpu, Save, RotateCcw } from 'lucide-react';
-import { AppConfig, defaultConfig, saveAppConfig } from '../config/appConfig';
+import { AppConfig, OcrProvider, defaultConfig, saveAppConfig } from '../config/appConfig';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -111,12 +111,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
               {formData.llmEnabled 
                 ? '提示：LLM 模式开启后，系统将尝试调用远端/本地大模型执行零样本非标准合同理解与语义转换。'
-                : '🔒 V1 运行模式：LLM 已关闭，系统 100% 运行于纯本地离线确定性逻辑与标准正则校验模式下，绝不上传数据。'}
+                : formData.ocrProvider === 'REMOTE_API'
+                  ? 'LLM 已关闭；当前选择行内远程 OCR，影像将按行内网关配置传输。'
+                  : '🔒 LLM 已关闭，OCR 模型与规则引擎均随应用发布，识别过程不上传影像。'}
             </p>
 
             {/* 展开的 LLM 配置参数 */}
             {formData.llmEnabled && (
-              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingTop: '0.75rem', borderTop: '1px stroke var(--border-color)' }}>
+              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-color)' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
                     LLM API Endpoint 地址
@@ -161,7 +163,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             )}
           </div>
 
-          {/* 2. OCR 与可信审计板块 */}
+          {/* 2. 文字识别与可信审计板块 */}
           <div style={{
             backgroundColor: 'var(--bg-app)',
             borderRadius: '8px',
@@ -170,17 +172,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
               <Cpu size={18} color="var(--accent-primary)" />
-              <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>⚡ 离线 OCR 与规则引擎设置</span>
+              <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>⚡ 文字识别与校验设置</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-                  OCR 识别提供商
+                  识别方案
                 </label>
                 <select
                   value={formData.ocrProvider}
-                  onChange={(e) => setFormData({ ...formData, ocrProvider: e.target.value as 'LOCAL_OFFLINE' | 'REMOTE_API' })}
+                  onChange={(e) => setFormData({ ...formData, ocrProvider: e.target.value as OcrProvider })}
                   style={{
                     width: '100%',
                     padding: '0.45rem 0.75rem',
@@ -191,9 +193,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     fontSize: '0.85rem'
                   }}
                 >
-                  <option value="LOCAL_OFFLINE">纯本地离线引擎 (PaddleOCR 算法卡片模式)</option>
-                  <option value="REMOTE_API">行内远程 OCR 服务网关</option>
+                  <option value="PADDLEOCR_JS">本地智能识别（推荐）</option>
+                  <option value="TESSERACT_JS">本地兼容识别（备用）</option>
+                  <option value="REMOTE_API">行内识别服务（待接入）</option>
                 </select>
+                <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  {formData.ocrProvider === 'PADDLEOCR_JS'
+                    ? '影像仅在本机处理；识别异常时自动切换备用方案，缺失字段会触发辅助复核。'
+                    : formData.ocrProvider === 'TESSERACT_JS'
+                      ? '兼容性备用方案，适用于智能识别暂不可用的情况，结果建议人工核对。'
+                      : '当前版本仅预留配置，尚未连接正式行内识别服务。'}
+                </p>
+              </div>
+              <div>
+                <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+                  <span>自动通过置信度阈值</span>
+                  <strong>{Math.round(formData.autoAcceptConfidenceThreshold * 100)}%</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="0.99"
+                  step="0.01"
+                  value={formData.autoAcceptConfidenceThreshold}
+                  onChange={(event) => setFormData({ ...formData, autoAcceptConfidenceThreshold: Number(event.target.value) })}
+                  style={{ width: '100%' }}
+                />
               </div>
             </div>
           </div>

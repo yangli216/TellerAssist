@@ -21,6 +21,9 @@ interface HeaderProps {
   currentScene: SceneType;
   onSceneChange: (scene: SceneType) => void;
   scannerConnected: boolean;
+  scannerStatusLabel: string;
+  isOcrRunning: boolean;
+  ocrProgress: number;
   onScanClick: () => void;
   config: AppConfig;
   onOpenSettings: () => void;
@@ -34,6 +37,9 @@ export const Header: React.FC<HeaderProps> = ({
   currentScene,
   onSceneChange,
   scannerConnected,
+  scannerStatusLabel,
+  isOcrRunning,
+  ocrProgress,
   onScanClick,
   config,
   onOpenSettings
@@ -43,15 +49,17 @@ export const Header: React.FC<HeaderProps> = ({
       height: '64px',
       backgroundColor: 'var(--bg-header)',
       borderBottom: '1px solid var(--border-color)',
-      padding: '0 1.5rem',
+      padding: '0 1.25rem',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
+      gap: '0.75rem',
       boxShadow: 'var(--shadow-sm)',
-      zIndex: 20
+      zIndex: 20,
+      flexShrink: 0
     }}>
       {/* 1. 品牌与场景选择 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
           <img
             src="/logo.png"
@@ -75,12 +83,12 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        <div style={{ height: '24px', width: '1px', backgroundColor: 'var(--border-color)' }} />
+        <div style={{ height: '28px', width: '1px', backgroundColor: 'var(--border-color)', flexShrink: 0 }} />
 
         {/* 高频对公场景下拉选择器 */}
-        <div style={{ position: 'relative' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '2px' }}>当前办理场景</div>
-          <div style={{ position: 'relative', display: 'inline-block' }}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>当前办理场景</div>
+          <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
             <select
               value={currentScene}
               onChange={(e) => onSceneChange(e.target.value as SceneType)}
@@ -89,7 +97,9 @@ export const Header: React.FC<HeaderProps> = ({
                 backgroundColor: 'var(--bg-card)',
                 border: '1px solid var(--border-color)',
                 borderRadius: '6px',
-                padding: '0.375rem 2rem 0.375rem 0.75rem',
+                width: '184px',
+                height: '36px',
+                padding: '0 2rem 0 0.75rem',
                 fontSize: '0.875rem',
                 fontWeight: 600,
                 color: 'var(--text-primary)',
@@ -118,17 +128,21 @@ export const Header: React.FC<HeaderProps> = ({
       {/* 2. 中间：模式切换 Tab 按钮 */}
       <div style={{
         backgroundColor: 'var(--bg-app)',
-        padding: '4px',
+        height: '38px',
+        padding: '3px',
         borderRadius: '8px',
         border: '1px solid var(--border-color)',
         display: 'flex',
-        gap: '4px'
+        alignItems: 'center',
+        gap: '3px',
+        flexShrink: 0
       }}>
         <button
           onClick={() => onModeChange('RECOGNITION')}
           className="btn"
           style={{
-            padding: '0.4rem 1.25rem',
+            height: '30px',
+            padding: '0 1rem',
             borderRadius: '6px',
             fontSize: '0.875rem',
             backgroundColor: mode === 'RECOGNITION' ? 'var(--bg-card)' : 'transparent',
@@ -139,14 +153,15 @@ export const Header: React.FC<HeaderProps> = ({
           }}
         >
           <Zap size={16} fill={mode === 'RECOGNITION' ? 'var(--accent-primary)' : 'none'} />
-          ⚡ 识别模式 (极速录入)
+          识别模式 (极速录入)
         </button>
 
         <button
           onClick={() => onModeChange('VERIFICATION')}
           className="btn"
           style={{
-            padding: '0.4rem 1.25rem',
+            height: '30px',
+            padding: '0 1rem',
             borderRadius: '6px',
             fontSize: '0.875rem',
             backgroundColor: mode === 'VERIFICATION' ? 'var(--bg-card)' : 'transparent',
@@ -157,26 +172,28 @@ export const Header: React.FC<HeaderProps> = ({
           }}
         >
           <ShieldCheck size={16} />
-          🛡️ 核对模式 (合规比对)
+          核对模式 (合规比对)
         </button>
       </div>
 
       {/* 3. 右侧：高拍仪抓拍控制 & 主题切换 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.625rem', flexShrink: 0 }}>
         {/* 高拍仪设备状态与抓拍按钮 */}
         <button
           onClick={onScanClick}
+          disabled={isOcrRunning}
           className="btn btn-primary"
           style={{
-            padding: '0.45rem 1rem',
+            height: '36px',
+            padding: '0 0.875rem',
             fontSize: '0.85rem'
           }}
         >
           <Camera size={16} />
-          高拍仪抓拍 / 重扫描
+          {isOcrRunning ? `离线识别中 ${ocrProgress}%` : '样张抓拍 / 重扫描'}
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
           <span style={{
             width: '8px',
             height: '8px',
@@ -184,10 +201,10 @@ export const Header: React.FC<HeaderProps> = ({
             backgroundColor: scannerConnected ? '#10b981' : '#ef4444',
             display: 'inline-block'
           }} />
-          {scannerConnected ? '高拍仪在线' : '离线模式'}
+          {scannerConnected ? scannerStatusLabel : '采集设备未连接'}
         </div>
 
-        <div style={{ height: '20px', width: '1px', backgroundColor: 'var(--border-color)' }} />
+        <div style={{ height: '28px', width: '1px', backgroundColor: 'var(--border-color)', flexShrink: 0 }} />
 
         {/* LLM 预留扩展状态指示 */}
         <div style={{
@@ -195,17 +212,19 @@ export const Header: React.FC<HeaderProps> = ({
           alignItems: 'center',
           gap: '0.375rem',
           fontSize: '0.75rem',
-          padding: '0.2rem 0.5rem',
-          borderRadius: '4px',
+          height: '30px',
+          padding: '0 0.5rem',
+          borderRadius: '6px',
           backgroundColor: config.llmEnabled ? 'var(--status-pass-bg)' : 'var(--bg-app)',
           border: '1px solid var(--border-color)',
-          color: config.llmEnabled ? 'var(--status-pass-text)' : 'var(--text-muted)'
+          color: config.llmEnabled ? 'var(--status-pass-text)' : 'var(--text-muted)',
+          whiteSpace: 'nowrap'
         }}>
           <Bot size={14} />
           {config.llmEnabled ? 'AI Copilot(开启)' : 'AI Copilot(停用)'}
         </div>
 
-        <div style={{ height: '20px', width: '1px', backgroundColor: 'var(--border-color)' }} />
+        <div style={{ height: '28px', width: '1px', backgroundColor: 'var(--border-color)', flexShrink: 0 }} />
 
         {/* ⚙️ 设置按钮 */}
         <button
@@ -215,8 +234,9 @@ export const Header: React.FC<HeaderProps> = ({
           style={{
             padding: '0.45rem',
             borderRadius: '50%',
-            width: '38px',
-            height: '38px'
+            width: '36px',
+            height: '36px',
+            flexShrink: 0
           }}
         >
           <Settings size={18} color="var(--text-secondary)" />
@@ -230,8 +250,9 @@ export const Header: React.FC<HeaderProps> = ({
           style={{
             padding: '0.45rem',
             borderRadius: '50%',
-            width: '38px',
-            height: '38px'
+            width: '36px',
+            height: '36px',
+            flexShrink: 0
           }}
         >
           {theme === 'dark' ? (

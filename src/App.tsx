@@ -9,7 +9,15 @@ import { sampleScenes } from './mock/sampleData';
 import { processLocalImageOcr } from './services/localOcrEngine';
 import { getAppConfig, AppConfig } from './config/appConfig';
 import { generateBankMessage, BankStandardMessage } from './services/exportService';
+import { validateFieldValue } from './services/businessRules';
+import { captureDocument, getScannerAdapter } from './services/scannerService';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
+
+const OCR_PROVIDER_LABELS: Record<AppConfig['ocrProvider'], string> = {
+  PADDLEOCR_JS: '本地智能识别',
+  TESSERACT_JS: '本地兼容识别',
+  REMOTE_API: '行内识别服务',
+};
 
 export const App: React.FC = () => {
   const [workMode, setWorkMode] = useState<WorkMode>('RECOGNITION');
@@ -28,7 +36,10 @@ export const App: React.FC = () => {
   const [fields, setFields] = useState<Record<string, FieldItem>>({});
   const [imageSrc, setImageSrc] = useState<string>('');
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
-  const [scannerConnected, setScannerConnected] = useState<boolean>(true);
+  const scannerAdapter = getScannerAdapter();
+  const [scannerConnected, setScannerConnected] = useState<boolean>(false);
+  const [isOcrRunning, setIsOcrRunning] = useState<boolean>(false);
+  const [ocrProgress, setOcrProgress] = useState<number>(0);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'info' | 'warning'; text: string } | null>(null);
 
   // 场景改变时清空当前待拍摄状态
@@ -45,6 +56,16 @@ export const App: React.FC = () => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  useEffect(() => {
+    let active = true;
+    scannerAdapter.isReady().then((ready) => {
+      if (active) setScannerConnected(ready);
+    }).catch(() => {
+      if (active) setScannerConnected(false);
+    });
+    return () => { active = false; };
+  }, [scannerAdapter]);
+
   const showToast = (type: 'success' | 'info' | 'warning', text: string) => {
     setToastMessage({ type, text });
     setTimeout(() => setToastMessage(null), 3000);
@@ -57,61 +78,137 @@ export const App: React.FC = () => {
   };
 
   const handleFieldChange = (id: string, newValue: string) => {
+    const validation = validateFieldValue(currentSceneId, id, newValue, 1, appConfig.autoAcceptConfidenceThreshold, true);
     setFields((prev) => ({
       ...prev,
       [id]: {
         ...prev[id],
         value: newValue,
+        source: 'MANUAL',
+        confidence: 1,
+        status: validation.status,
+        ruleMessage: validation.ruleMessage,
         userModified: true,
       }
     }));
   };
 
+  const handleConfirmField = (id: string) => {
+    const field = fields[id];
+    if (!field) return;
+    const validation = validateFieldValue(currentSceneId, id, field.value, 1, appConfig.autoAcceptConfidenceThreshold, true);
+    setFields((previous) => ({
+      ...previous,
+      [id]: {
+        ...previous[id],
+        status: validation.status,
+        ruleMessage: validation.status === 'PASSED' ? '已由柜员对照原图确认' : validation.ruleMessage,
+        userModified: true,
+      },
+    }));
+    showToast(validation.status === 'PASSED' ? 'success' : 'warning', validation.ruleMessage);
+  };
+
   const handleResolveConflict = (id: string, acceptedValue: string) => {
+    const validation = validateFieldValue(currentSceneId, id, acceptedValue, 1, appConfig.autoAcceptConfidenceThreshold, true);
     setFields((prev) => ({
       ...prev,
       [id]: {
         ...prev[id],
         value: acceptedValue,
-        status: 'PASSED',
+        source: 'MANUAL',
+        confidence: 1,
+        status: validation.status,
         userModified: true,
-        ruleMessage: '已人工确认，采纳推荐数据并完成闭环存证',
+        ruleMessage: validation.status === 'PASSED' ? '已人工确认并通过字段规则校验' : validation.ruleMessage,
       }
     }));
-    showToast('success', `字段 [${fields[id]?.label}] 冲突已解决并自动校验通过`);
+    showToast(validation.status === 'PASSED' ? 'success' : 'warning', validation.ruleMessage);
+  };
+
+  const runOcr = async (source: string) => {
+    setImageSrc(source);
+    setFields({});
+    setActiveFieldId(null);
+    setIsOcrRunning(true);
+    setOcrProgress(0);
+    showToast('info', `正在使用 ${OCR_PROVIDER_LABELS[appConfig.ocrProvider]} 执行识别...`);
+
+    try {
+      const ocrRes = await processLocalImageOcr(
+        source,
+        currentSceneId,
+        appConfig.autoAcceptConfidenceThreshold,
+        ({ progress }) => setOcrProgress(Math.round(progress * 100)),
+        appConfig.ocrProvider,
+      );
+      setFields(ocrRes.fields);
+      setActiveFieldId(Object.keys(ocrRes.fields)[0] || null);
+      const reviewCount = Object.values(ocrRes.fields).filter((field) => field.status !== 'PASSED').length;
+      if (ocrRes.fallbackReason) {
+        showToast(
+          'warning',
+          '智能识别暂不可用，已自动切换至备用识别，请重点核对结果',
+        );
+      } else if (ocrRes.conflictedFieldIds?.length) {
+        showToast(
+          'warning',
+          `检测到 ${ocrRes.conflictedFieldIds.length} 个识别结果分歧或低置信度字段，已拦截自动通过`,
+        );
+      } else if (ocrRes.supplementedFieldIds?.length) {
+        showToast(
+          'warning',
+          `智能识别完成，辅助复核补全 ${ocrRes.supplementedFieldIds.length} 个缺失字段，请重点核对`,
+        );
+      } else {
+        showToast(
+          reviewCount > 0 ? 'warning' : 'success',
+          reviewCount > 0
+            ? `${OCR_PROVIDER_LABELS[ocrRes.engine]} 完成，${reviewCount} 个字段需要柜员核对`
+            : `${OCR_PROVIDER_LABELS[ocrRes.engine]} 完成，平均置信度 ${Math.round(ocrRes.averageConfidence * 100)}%`,
+        );
+      }
+    } catch (error) {
+      setFields({});
+      console.error('文字识别执行失败', error);
+      showToast(
+        'warning',
+        appConfig.ocrProvider === 'REMOTE_API'
+          ? '行内识别服务尚未接入，请在设置中选择本地识别'
+          : '识别未完成，请检查图片清晰度后重试；如仍失败，可在设置中切换备用识别',
+      );
+    } finally {
+      setIsOcrRunning(false);
+      setOcrProgress(0);
+    }
   };
 
   const handleScanClick = async () => {
-    setScannerConnected(false);
-    showToast('info', '高拍仪抓拍中，正在调取采样材料并进行纯本地离线 OCR 推理...');
-    
-    // 加载当前场景采样影像并调用离线 OCR
-    const scene = sampleScenes[currentSceneId];
-    const targetSrc = scene.sampleImage;
-    setImageSrc(targetSrc);
-
-    const ocrRes = await processLocalImageOcr(targetSrc, currentSceneId);
-    setFields(ocrRes.fields);
-    setActiveFieldId(Object.keys(ocrRes.fields)[0] || null);
-    setScannerConnected(true);
-    showToast('success', '纯本地 OCR 抓拍识别完成！已自动解析结构化字段与生成坐标映射');
+    try {
+      const capture = await captureDocument(sampleScenes[currentSceneId]);
+      await runOcr(capture.imageSource);
+    } catch (error) {
+      showToast('warning', error instanceof Error ? error.message : String(error));
+    }
   };
 
-  const handleImageUpload = async (newSrc: string) => {
-    setImageSrc(newSrc);
-    showToast('info', '自定扫描件已接收，正在触发纯本地离线 OCR 版面分析...');
-    
-    const ocrRes = await processLocalImageOcr(newSrc, currentSceneId);
-    setFields(ocrRes.fields);
-    setActiveFieldId(Object.keys(ocrRes.fields)[0] || null);
-    showToast('success', '纯本地离线 OCR 提取成功，已生成全量标注框与可信存证');
-  };
+  const handleImageUpload = async (newSrc: string) => runOcr(newSrc);
 
   const handleSubmit = () => {
-    const msg = generateBankMessage(currentSceneId, fields);
-    setExportMessage(msg);
-    setIsExportOpen(true);
-    showToast('success', '已受控生成银行对公填单报文！数据全存证闭环');
+    const blockingFields = Object.values(fields).filter((field) => field.status !== 'PASSED');
+    if (Object.keys(fields).length === 0 || blockingFields.length > 0) {
+      showToast('warning', Object.keys(fields).length === 0 ? '请先识别业务材料' : `仍有 ${blockingFields.length} 个字段未通过校验`);
+      return;
+    }
+
+    try {
+      const msg = generateBankMessage(currentSceneId, fields);
+      setExportMessage(msg);
+      setIsExportOpen(true);
+      showToast('success', '已生成待行内集成层消费的对公填单 JSON 报文');
+    } catch (error) {
+      showToast('warning', error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
@@ -133,6 +230,9 @@ export const App: React.FC = () => {
         currentScene={currentSceneId}
         onSceneChange={setCurrentSceneId}
         scannerConnected={scannerConnected}
+        scannerStatusLabel={scannerAdapter.mode === 'DEMO' ? '样张适配器' : scannerAdapter.displayName}
+        isOcrRunning={isOcrRunning}
+        ocrProgress={ocrProgress}
         onScanClick={handleScanClick}
         config={appConfig}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -162,9 +262,11 @@ export const App: React.FC = () => {
           onFieldSelect={setActiveFieldId}
           onFieldChange={handleFieldChange}
           onResolveConflict={handleResolveConflict}
+          onConfirmField={handleConfirmField}
           workMode={workMode}
           onSubmit={handleSubmit}
           currentScene={sampleScenes[currentSceneId]}
+          isProcessing={isOcrRunning}
         />
       </main>
 

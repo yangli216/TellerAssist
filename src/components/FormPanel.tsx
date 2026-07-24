@@ -10,9 +10,28 @@ import {
   Info,
   FileCheck2,
   AlertCircle,
-  Edit3
+  Edit3,
+  ShieldCheck,
 } from 'lucide-react';
 import { FieldItem, WorkMode, FieldStatus, BusinessScene } from '../types/business';
+
+const OCR_ENGINE_LABELS = {
+  PADDLEOCR_JS: '智能识别',
+  TESSERACT_JS: '辅助复核',
+} as const;
+
+const OCR_PASS_LABELS = {
+  FULL_PAGE: '全图识别',
+  ROI_RETRY: '名称区域增强',
+  SUPPLEMENT: '补充识别',
+} as const;
+
+const getFieldProvenance = (field: FieldItem) => {
+  if (!field.ocrEngine) return field.source === 'MANUAL' ? '人工录入' : field.source;
+  const engine = OCR_ENGINE_LABELS[field.ocrEngine];
+  const pass = field.ocrPass ? ` · ${OCR_PASS_LABELS[field.ocrPass]}` : '';
+  return field.source === 'MANUAL' ? `人工修改 · 原始 ${engine}${pass}` : `${engine}${pass}`;
+};
 
 interface FormPanelProps {
   fields: Record<string, FieldItem>;
@@ -20,9 +39,11 @@ interface FormPanelProps {
   onFieldSelect: (fieldId: string | null) => void;
   onFieldChange: (fieldId: string, newValue: string) => void;
   onResolveConflict: (fieldId: string, acceptedValue: string) => void;
+  onConfirmField: (fieldId: string) => void;
   workMode: WorkMode;
   onSubmit: () => void;
   currentScene?: BusinessScene;
+  isProcessing: boolean;
 }
 
 export const FormPanel: React.FC<FormPanelProps> = ({
@@ -31,9 +52,11 @@ export const FormPanel: React.FC<FormPanelProps> = ({
   onFieldSelect,
   onFieldChange,
   onResolveConflict,
+  onConfirmField,
   workMode,
   onSubmit,
-  currentScene
+  currentScene,
+  isProcessing,
 }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -52,12 +75,15 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         return <span className="badge badge-review"><AlertTriangle size={12} />待确认</span>;
       case 'CONFLICT':
         return <span className="badge badge-conflict"><XCircle size={12} />冲突待核</span>;
+      case 'MISSING':
+        return <span className="badge badge-conflict"><XCircle size={12} />必填缺失</span>;
       default:
         return null;
     }
   };
 
-  const conflictCount = Object.values(fields).filter((f) => f.status === 'CONFLICT').length;
+  const blockingCount = Object.values(fields).filter((field) => field.status !== 'PASSED').length;
+  const canSubmit = Object.keys(fields).length > 0 && blockingCount === 0 && !isProcessing;
 
   return (
     <div style={{
@@ -79,8 +105,11 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         backgroundColor: 'var(--bg-card)'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <h2 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0 }}>
-            {workMode === 'RECOGNITION' ? '⚡ 图像信息快速识别面板' : '🛡️ 对公资料可信校验表单'}
+          <h2 style={{ fontSize: '0.95rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {workMode === 'RECOGNITION'
+              ? <Zap size={18} color="var(--accent-primary)" strokeWidth={2.25} aria-hidden="true" />
+              : <ShieldCheck size={18} color="var(--accent-primary)" strokeWidth={2.25} aria-hidden="true" />}
+            <span>{workMode === 'RECOGNITION' ? '图像信息快速识别面板' : '对公资料可信校验表单'}</span>
           </h2>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
             {workMode === 'RECOGNITION' 
@@ -91,18 +120,18 @@ export const FormPanel: React.FC<FormPanelProps> = ({
 
         {/* 极速一键填单或核对统计 */}
         {workMode === 'RECOGNITION' ? (
-          <button className="btn btn-primary" onClick={onSubmit} disabled={Object.keys(fields).length === 0}>
+          <button className="btn btn-primary" onClick={onSubmit} disabled={!canSubmit}>
             <Zap size={16} />
-            一键自动预填至柜面系统
+            生成待录入报文
           </button>
         ) : (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', backgroundColor: 'rgba(16,185,129,0.15)', color: '#10b981', fontWeight: 600 }}>
               通过: {Object.values(fields).filter(f => f.status === 'PASSED').length}
             </span>
-            {conflictCount > 0 && (
+            {blockingCount > 0 && (
               <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', backgroundColor: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600 }}>
-                冲突: {conflictCount}
+                待处理: {blockingCount}
               </span>
             )}
           </div>
@@ -233,7 +262,7 @@ export const FormPanel: React.FC<FormPanelProps> = ({
                     {field.label}
                   </span>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                    (来源: {field.source} | 置信度: {Math.round(field.confidence * 100)}%)
+                    {getFieldProvenance(field)} · 置信度 {Math.round(field.confidence * 100)}%
                   </span>
                 </div>
                 <div>{getStatusBadge(field.status)}</div>
@@ -267,6 +296,12 @@ export const FormPanel: React.FC<FormPanelProps> = ({
                     {copiedId === field.id ? <Check size={16} color="#10b981" /> : <Copy size={16} />}
                     {copiedId === field.id ? '已复制' : '复制'}
                   </button>
+                  {field.status === 'REVIEW' && field.value && (
+                    <button className="btn btn-primary" onClick={() => onConfirmField(field.id)}>
+                      <CheckCircle2 size={16} />
+                      人工确认
+                    </button>
+                  )}
                 </div>
               ) : (
                 /* 核对模式下：结构化对比与冲突处理 */
@@ -298,6 +333,12 @@ export const FormPanel: React.FC<FormPanelProps> = ({
                       <Edit3 size={14} />
                       {editingId === field.id ? '锁定' : '修改'}
                     </button>
+                    {field.status === 'REVIEW' && field.value && (
+                      <button className="btn btn-primary btn-sm" onClick={() => onConfirmField(field.id)}>
+                        <CheckCircle2 size={14} />
+                        确认与原图一致
+                      </button>
+                    )}
                   </div>
 
                   {/* 规则校验提示信息 */}
@@ -356,6 +397,60 @@ export const FormPanel: React.FC<FormPanelProps> = ({
                   )}
                 </div>
               )}
+
+              {workMode === 'RECOGNITION' && field.ruleMessage && (
+                <div style={{
+                  marginTop: '0.5rem',
+                  fontSize: '0.78rem',
+                  color: isConflict ? 'var(--status-conflict-text)' : 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.375rem'
+                }}>
+                  <Info size={14} style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <span>{field.ruleMessage}</span>
+                </div>
+              )}
+
+              {isConflict && field.ocrAlternatives && field.ocrAlternatives.length > 0 && (
+                <div style={{
+                  marginTop: '0.75rem',
+                  backgroundColor: 'var(--status-conflict-bg)',
+                  border: '1px solid var(--status-conflict-border)',
+                  borderRadius: '6px',
+                  padding: '0.75rem 1rem',
+                  fontSize: '0.82rem'
+                }}>
+                  <div style={{ fontWeight: 700, color: 'var(--status-conflict-text)', marginBottom: '0.5rem' }}>
+                    多次识别结果不一致，请对照原图选择
+                  </div>
+                  <div style={{ display: 'grid', gap: '0.5rem' }}>
+                    <button
+                      className="btn btn-sm btn-outline"
+                      onClick={() => onResolveConflict(field.id, field.value)}
+                      style={{ justifyContent: 'space-between' }}
+                    >
+                      <span>{getFieldProvenance(field)}：{field.value}</span>
+                      <span>采纳</span>
+                    </button>
+                    {field.ocrAlternatives.map((alternative, index) => (
+                      <button
+                        key={`${alternative.engine}-${alternative.value}-${index}`}
+                        className="btn btn-sm btn-outline"
+                        onClick={() => onResolveConflict(field.id, alternative.value)}
+                        style={{ justifyContent: 'space-between' }}
+                      >
+                        <span>
+                          {OCR_ENGINE_LABELS[alternative.engine]}
+                          {alternative.pass ? ` · ${OCR_PASS_LABELS[alternative.pass]}` : ''}
+                          {` · ${Math.round(alternative.confidence * 100)}%：${alternative.value}`}
+                        </span>
+                        <span>采纳</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
@@ -372,8 +467,10 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         justifyContent: 'space-between'
       }}>
         <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          {conflictCount > 0 ? (
-            <span style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ 尚有 {conflictCount} 项数据冲突需核对解决</span>
+          {blockingCount > 0 ? (
+            <span style={{ color: '#ef4444', fontWeight: 600 }}>⚠️ 尚有 {blockingCount} 项缺失、低置信或规则异常</span>
+          ) : Object.keys(fields).length === 0 ? (
+            <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>请先采集或上传业务材料</span>
           ) : (
             <span style={{ color: '#10b981', fontWeight: 600 }}>✓ 所有字段规则校验通过，允许受控提交</span>
           )}
@@ -382,15 +479,15 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         <button
           className="btn btn-primary"
           onClick={onSubmit}
-          disabled={conflictCount > 0 && workMode === 'VERIFICATION'}
+          disabled={!canSubmit}
           style={{
-            opacity: (conflictCount > 0 && workMode === 'VERIFICATION') ? 0.6 : 1,
+            opacity: canSubmit ? 1 : 0.6,
             padding: '0.4rem 1.25rem',
             fontSize: '0.85rem'
           }}
         >
           <Send size={15} />
-          {workMode === 'RECOGNITION' ? '导出并智能填充' : '确认无误受控写入系统'}
+          {workMode === 'RECOGNITION' ? '导出待录入报文' : '确认无误并生成报文'}
         </button>
       </div>
     </div>

@@ -66,7 +66,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <div>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>受控生成 - 标准银行对公填单报文</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                数据证据链已存证 | 报文流水号: {message.header.messageId}
+                本地校验已通过 | 报文流水号: {message.header.messageId}
               </p>
             </div>
           </div>
@@ -117,7 +117,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           backgroundColor: 'var(--bg-card)'
         }}>
           <span style={{ fontSize: '0.8rem', color: '#10b981', fontWeight: 600 }}>
-            ✓ 柜员确认完成，准备写入核心柜面系统
+            ✓ 本文件尚未写入核心系统，需由行内集成层接收
           </span>
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>

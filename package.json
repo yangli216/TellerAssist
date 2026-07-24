@@ -1,15 +1,21 @@
 {
   "name": "teller-assist",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": {
+    "prepare:ocr": "node scripts/prepare-ocr-assets.mjs",
+    "predev": "npm run prepare:ocr",
     "dev": "vite",
+    "prebuild": "npm run prepare:ocr",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@paddleocr/paddleocr-js": "^0.4.2",
+    "@tesseract.js-data/chi_sim": "^1.0.0",
     "lucide-react": "^0.344.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -22,6 +28,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "playwright": "^1.61.1",
     "typescript": "^5.2.2",
-    "vite": "^5.1.6"
+    "vite": "^5.1.6",
+    "vitest": "^2.1.9"
   }
 }

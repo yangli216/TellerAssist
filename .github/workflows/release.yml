@@ -10,7 +10,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run deterministic rule tests
+        run: npm test
+
+      - name: Build frontend with bundled OCR assets
+        run: npm run build
+
   build-tauri:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     strategy:
@@ -41,21 +64,21 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri Application & Create Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v1.0.0
-          releaseName: '智晓通 TellerAssist v1.0.0 Release'
+          tagName: v__VERSION__
+          releaseName: '智晓通 TellerAssist v__VERSION__ Release'
           releaseBody: |
-            ## 智晓通 (TellerAssist) v1.0.0 桌面端
-            - 零外部依赖，纯本地离线 OCR 与确定性规则提取引擎
+            ## 智晓通 (TellerAssist) v__VERSION__ 桌面端
+            - 随安装包发布中文模型、WASM core 与 worker 的纯本地离线 OCR
             - 支持对公账户销户、执照更新与网银变更三大高频柜面场景
-            - 包含图形 BBox 反查定位、数据碰撞与红黄绿合规状态指示
-            - 标准银行对公 JSON 报文受控受审导出闭环
+            - 包含真实 OCR BBox 反查定位、低置信度拦截和人工确认
+            - 空报文、必填缺失和规则异常受控拦截
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

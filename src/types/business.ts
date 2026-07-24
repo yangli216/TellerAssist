@@ -15,6 +15,15 @@ export interface BBox {
 
 export type FieldStatus = 'PASSED' | 'REVIEW' | 'CONFLICT' | 'MISSING';
 
+export type OcrEngineId = 'PADDLEOCR_JS' | 'TESSERACT_JS';
+
+export interface OcrAlternative {
+  engine: OcrEngineId;
+  value: string;
+  confidence: number;
+  pass?: 'FULL_PAGE' | 'ROI_RETRY' | 'SUPPLEMENT';
+}
+
 export interface FieldItem {
   id: string;
   label: string;
@@ -22,6 +31,9 @@ export interface FieldItem {
   ocrValue: string;
   hostValue?: string;
   source: 'OCR' | 'HOST' | 'MANUAL';
+  ocrEngine?: OcrEngineId;
+  ocrPass?: 'FULL_PAGE' | 'ROI_RETRY' | 'SUPPLEMENT';
+  ocrAlternatives?: OcrAlternative[];
   confidence: number;
   bbox: BBox;
   status: FieldStatus;

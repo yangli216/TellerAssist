@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   ZoomIn, 
   ZoomOut, 
@@ -28,16 +28,63 @@ export const DocViewer: React.FC<DocViewerProps> = ({
 }) => {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragStartRef = useRef({ pointerX: 0, pointerY: 0, panX: 0, panY: 0 });
 
   const handleZoomIn = () => setZoom((prev) => Math.min(prev + 0.25, 3));
-  const handleZoomOut = () => setZoom((prev) => Math.max(prev - 0.25, 0.5));
+  const handleZoomOut = () => {
+    const nextZoom = Math.max(zoom - 0.25, 0.5);
+    if (nextZoom <= 1) setPan({ x: 0, y: 0 });
+    setZoom(nextZoom);
+  };
   const handleResetZoom = () => {
     setZoom(1);
     setRotation(0);
+    setPan({ x: 0, y: 0 });
   };
 
-  const handleRotate = () => setRotation((prev) => (prev + 90) % 360);
+  const handleRotate = () => {
+    setRotation((prev) => (prev + 90) % 360);
+    setPan({ x: 0, y: 0 });
+  };
+
+  useEffect(() => {
+    setZoom(1);
+    setRotation(0);
+    setPan({ x: 0, y: 0 });
+  }, [imageSrc]);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (zoom <= 1 || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest('[data-ocr-marker]')) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStartRef.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      panX: pan.x,
+      panY: pan.y,
+    };
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    setPan({
+      x: dragStartRef.current.panX + event.clientX - dragStartRef.current.pointerX,
+      y: dragStartRef.current.panY + event.clientY - dragStartRef.current.pointerY,
+    });
+  };
+
+  const stopDragging = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsDragging(false);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -75,18 +122,28 @@ export const DocViewer: React.FC<DocViewerProps> = ({
         justifyContent: 'space-between',
         backgroundColor: 'var(--bg-card)'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Layers size={18} color="var(--accent-primary)" />
-          <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-            {workMode === 'VERIFICATION' ? '🛡️ 证据链对比视角' : '⚡ 快速扫描识别'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          <Layers size={18} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
+          <span style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {workMode === 'VERIFICATION' ? '证据链对比视角' : '快速扫描识别'}
           </span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          <span
+            title="分辨率：2400×3200，300DPI"
+            style={{
+              fontSize: '0.75rem',
+              color: 'var(--text-muted)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              minWidth: 0,
+            }}
+          >
             (分辨率: 2400×3200 300DPI)
           </span>
         </div>
 
         {/* 缩放、旋转、重新上传按钮 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0, marginLeft: '0.75rem' }}>
           <button className="btn btn-outline btn-sm" onClick={handleZoomOut} title="缩小">
             <ZoomOut size={14} />
           </button>
@@ -124,15 +181,23 @@ export const DocViewer: React.FC<DocViewerProps> = ({
       </div>
 
       {/* 2. 图像画布与坐标框显示区域 */}
-      <div style={{
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+        style={{
         flex: 1,
-        overflow: 'auto',
+        overflow: 'hidden',
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: '1.5rem',
-        backgroundColor: 'var(--bg-app)'
+        backgroundColor: 'var(--bg-app)',
+        cursor: imageSrc && zoom > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default',
+        touchAction: 'none',
+        userSelect: isDragging ? 'none' : 'auto',
       }}>
         {!imageSrc ? (
           /* 空状态：等待高拍仪抓拍或上传文件 */
@@ -178,9 +243,9 @@ export const DocViewer: React.FC<DocViewerProps> = ({
         ) : (
           <div style={{
             position: 'relative',
-            transform: `scale(${zoom}) rotate(${rotation}deg)`,
+            transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom}) rotate(${rotation}deg)`,
             transformOrigin: 'center center',
-            transition: 'transform 0.2s ease-out',
+            transition: isDragging ? 'none' : 'transform 0.2s ease-out',
             boxShadow: 'var(--shadow-lg)',
             borderRadius: '8px',
             overflow: 'hidden',
@@ -191,6 +256,8 @@ export const DocViewer: React.FC<DocViewerProps> = ({
             <img
               src={imageSrc}
               alt="扫描证件预览"
+              draggable={false}
+              onDragStart={(event) => event.preventDefault()}
               style={{
                 display: 'block',
                 maxWidth: '100%',
@@ -201,59 +268,48 @@ export const DocViewer: React.FC<DocViewerProps> = ({
 
             {/* 绘制 OCR 包围框 (BBox) Overlay */}
             {Object.values(fields).map((field) => {
+              if (field.bbox.width <= 0 || field.bbox.height <= 0) return null;
               const isActive = activeFieldId === field.id;
+              // OCR 多边形通常会比字形顶部多包含少量行高，显示层轻微下移以贴合原文字。
+              // 仅校准可视标记，不修改字段中用于审计的原始坐标。
+              const markerYOffset = Math.min(field.bbox.height * 0.12, 0.35);
               
               let borderColor = 'rgba(16, 185, 129, 0.7)';
-              let bgColor = 'rgba(16, 185, 129, 0.12)';
               
               if (field.status === 'REVIEW') {
                 borderColor = 'rgba(245, 158, 11, 0.9)';
-                bgColor = 'rgba(245, 158, 11, 0.15)';
               } else if (field.status === 'CONFLICT') {
                 borderColor = 'rgba(239, 68, 68, 0.95)';
-                bgColor = 'rgba(239, 68, 68, 0.2)';
               }
 
               if (isActive) {
                 borderColor = '#2563eb';
-                bgColor = 'rgba(37, 99, 235, 0.25)';
               }
 
               return (
                 <div
                   key={field.id}
+                  data-ocr-marker
                   onClick={() => onFieldSelect(field.id)}
+                  onPointerDown={(event) => event.stopPropagation()}
                   style={{
                     position: 'absolute',
                     left: `${field.bbox.x}%`,
-                    top: `${field.bbox.y}%`,
+                    top: `${field.bbox.y + markerYOffset}%`,
                     width: `${field.bbox.width}%`,
                     height: `${field.bbox.height}%`,
-                    border: `2px ${isActive ? 'solid' : 'dashed'} ${borderColor}`,
-                    backgroundColor: bgColor,
-                    borderRadius: '4px',
+                    border: `${2 / zoom}px ${isActive ? 'solid' : 'dashed'} ${borderColor}`,
+                    backgroundColor: 'transparent',
+                    borderRadius: `${4 / zoom}px`,
+                    boxSizing: 'border-box',
                     cursor: 'pointer',
-                    boxShadow: isActive ? '0 0 12px rgba(37, 99, 235, 0.8)' : 'none',
+                    boxShadow: isActive ? `0 0 0 ${2 / zoom}px rgba(37, 99, 235, 0.22)` : 'none',
                     transition: 'all 0.15s ease-in-out',
                     zIndex: isActive ? 10 : 2
                   }}
-                  title={`点击查看证据: ${field.label}`}
-                >
-                  <div style={{
-                    position: 'absolute',
-                    top: '-20px',
-                    left: '0',
-                    backgroundColor: isActive ? '#2563eb' : (field.status === 'CONFLICT' ? '#dc2626' : '#374151'),
-                    color: '#ffffff',
-                    fontSize: '0.65rem',
-                    padding: '1px 6px',
-                    borderRadius: '3px',
-                    whiteSpace: 'nowrap',
-                    fontWeight: 600
-                  }}>
-                    {field.label}
-                  </div>
-                </div>
+                  title={`${field.label}：${field.value || '未识别'}`}
+                  aria-label={`${field.label}：${field.value || '未识别'}`}
+                />
               );
             })}
           </div>
@@ -272,11 +328,16 @@ export const DocViewer: React.FC<DocViewerProps> = ({
         justifyContent: 'space-between',
         backgroundColor: 'var(--bg-card)'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <span>图文证据链：<strong style={{ color: 'var(--text-primary)' }}>已建立坐标点位映射 ({Object.keys(fields).length}处)</strong></span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
+          <span style={{ whiteSpace: 'nowrap' }}>图文证据链：<strong style={{ color: 'var(--text-primary)' }}>已建立坐标点位映射 ({Object.keys(fields).length}处)</strong></span>
+          {activeFieldId && fields[activeFieldId] && (
+            <span style={{ color: 'var(--accent-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              当前定位：{fields[activeFieldId].label} · {fields[activeFieldId].value || '未识别'}
+            </span>
+          )}
         </div>
-        <div>
-          提示: 点击表单可联动高亮原图坐标
+        <div style={{ whiteSpace: 'nowrap', marginLeft: '1rem' }}>
+          {zoom > 1 ? '按住画面拖动查看 · 点击标记联动字段' : '点击表单可联动高亮原图坐标'}
         </div>
       </div>
     </div>
