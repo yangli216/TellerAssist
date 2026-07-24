@@ -49,6 +49,8 @@ export const DocViewer: React.FC<DocViewerProps> = ({
         }
       };
       reader.readAsDataURL(file);
+      // 清空 value，确保选择同名文件或重复点击时百分百触发 onChange
+      e.target.value = '';
     }
   };
 
