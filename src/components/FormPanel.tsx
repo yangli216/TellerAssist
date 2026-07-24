@@ -120,17 +120,19 @@ export const FormPanel: React.FC<FormPanelProps> = ({
         backgroundColor: 'var(--bg-app)'
       }}>
         {Object.keys(fields).length === 0 ? (
-          /* 详细的材料扫入指南与防错防混淆说明卡 */
+          /* 详细的材料扫入指南与防错防混淆说明卡 (水平+垂直双向居中) */
           <div style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            gap: '1.25rem',
-            maxWidth: '560px',
-            margin: '0 auto',
-            width: '100%'
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            padding: '1rem'
           }}>
-            {/* 顶栏提示卡片 */}
             <div style={{
+              width: '100%',
+              maxWidth: '560px',
               padding: '1.25rem',
               borderRadius: '10px',
               backgroundColor: 'var(--bg-card)',
