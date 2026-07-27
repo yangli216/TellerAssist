@@ -22,7 +22,7 @@ const OCR_ENGINE_LABELS = {
 
 const OCR_PASS_LABELS = {
   FULL_PAGE: '全图识别',
-  ROI_RETRY: '名称区域增强',
+  ROI_RETRY: '字段区域增强',
   SUPPLEMENT: '补充识别',
 } as const;
 

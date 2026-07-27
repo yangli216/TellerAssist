@@ -5,7 +5,8 @@ import {
   RotateCw, 
   Maximize2, 
   Upload, 
-  Layers
+  Layers,
+  BarChart3,
 } from 'lucide-react';
 import { FieldItem, WorkMode } from '../types/business';
 
@@ -16,6 +17,7 @@ interface DocViewerProps {
   onFieldSelect: (fieldId: string) => void;
   workMode: WorkMode;
   onImageUpload: (newSrc: string) => void;
+  onOpenBenchmark: () => void;
 }
 
 export const DocViewer: React.FC<DocViewerProps> = ({
@@ -25,6 +27,7 @@ export const DocViewer: React.FC<DocViewerProps> = ({
   onFieldSelect,
   workMode,
   onImageUpload,
+  onOpenBenchmark,
 }) => {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -169,6 +172,14 @@ export const DocViewer: React.FC<DocViewerProps> = ({
           >
             <Upload size={14} />
             上传文件
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={onOpenBenchmark}
+            title="批量识别评测"
+            aria-label="批量识别评测"
+          >
+            <BarChart3 size={14} />
           </button>
           <input
             type="file"

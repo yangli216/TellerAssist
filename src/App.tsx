@@ -4,6 +4,7 @@ import { DocViewer } from './components/DocViewer';
 import { FormPanel } from './components/FormPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { ExportModal } from './components/ExportModal';
+import { BenchmarkModal } from './components/BenchmarkModal';
 import { WorkMode, ThemeMode, SceneType, FieldItem } from './types/business';
 import { sampleScenes } from './mock/sampleData';
 import { processLocalImageOcr } from './services/localOcrEngine';
@@ -31,6 +32,7 @@ export const App: React.FC = () => {
   // 报文导出弹窗状态
   const [exportMessage, setExportMessage] = useState<BankStandardMessage | null>(null);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState<boolean>(false);
   
   // 初始空状态（移除写死的 Demo 预填数据，等待柜员抓拍/上传）
   const [fields, setFields] = useState<Record<string, FieldItem>>({});
@@ -142,10 +144,21 @@ export const App: React.FC = () => {
         ({ progress }) => setOcrProgress(Math.round(progress * 100)),
         appConfig.ocrProvider,
       );
+      if (ocrRes.processedImageSource) setImageSrc(ocrRes.processedImageSource);
       setFields(ocrRes.fields);
       setActiveFieldId(Object.keys(ocrRes.fields)[0] || null);
       const reviewCount = Object.values(ocrRes.fields).filter((field) => field.status !== 'PASSED').length;
-      if (ocrRes.fallbackReason) {
+      if (ocrRes.imageQuality?.issues.length) {
+        const qualityLabels = ocrRes.imageQuality.issues.map((issue) => ({
+          LOW_RESOLUTION: '分辨率偏低',
+          BLURRY: '图像偏模糊',
+          LOW_CONTRAST: '对比度偏低',
+        })[issue]);
+        showToast(
+          'warning',
+          `图片质量提示：${qualityLabels.join('、')}，结果已进入人工核对`,
+        );
+      } else if (ocrRes.fallbackReason) {
         showToast(
           'warning',
           '智能识别暂不可用，已自动切换至备用识别，请重点核对结果',
@@ -253,6 +266,7 @@ export const App: React.FC = () => {
           onFieldSelect={setActiveFieldId}
           workMode={workMode}
           onImageUpload={handleImageUpload}
+          onOpenBenchmark={() => setIsBenchmarkOpen(true)}
         />
 
         {/* 右侧智能表单与核对校验 */}
@@ -286,6 +300,14 @@ export const App: React.FC = () => {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         message={exportMessage}
+      />
+
+      <BenchmarkModal
+        isOpen={isBenchmarkOpen}
+        onClose={() => setIsBenchmarkOpen(false)}
+        sceneId={currentSceneId}
+        provider={appConfig.ocrProvider}
+        confidenceThreshold={appConfig.autoAcceptConfidenceThreshold}
       />
 
       {/* 浮动 Toast 提醒 */}

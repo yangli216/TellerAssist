@@ -1,4 +1,5 @@
 import type { FieldItem } from '../types/business';
+import type { ImageQualityReport } from './imagePreprocessing';
 
 export type LocalOcrEngineId = 'PADDLEOCR_JS' | 'TESSERACT_JS';
 
@@ -16,4 +17,7 @@ export interface OcrResult {
   supplementedFieldIds?: string[];
   refinedFieldIds?: string[];
   conflictedFieldIds?: string[];
+  processedImageSource?: string;
+  imageQuality?: ImageQualityReport;
+  correctionSummary?: string[];
 }

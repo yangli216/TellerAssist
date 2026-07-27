@@ -185,7 +185,7 @@ export const processLocalImageOcr = async (
       .map((field) => field.id);
     const fieldsToCrossCheck = [...new Set([
       ...missingFieldIds,
-      ...(paddleResult.refinedFieldIds ?? []),
+      ...(paddleResult.conflictedFieldIds ?? []),
     ])];
     if (fieldsToCrossCheck.length === 0) {
       onProgress?.({ status: 'ocr complete', progress: 1 });
@@ -218,7 +218,10 @@ export const processLocalImageOcr = async (
         ...paddleResult,
         fields: mergeResult.fields,
         supplementedFieldIds: mergeResult.supplementedFieldIds,
-        conflictedFieldIds: mergeResult.conflictedFieldIds,
+        conflictedFieldIds: [...new Set([
+          ...(paddleResult.conflictedFieldIds ?? []),
+          ...mergeResult.conflictedFieldIds,
+        ])],
       };
     } catch {
       // Paddle 已成功时，补缺引擎失败不应丢弃主识别结果。

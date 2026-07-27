@@ -3,7 +3,9 @@ import ortWasmUrl from '@ort-wasm-jsep';
 import type { FieldItem, SceneType } from '../types/business';
 import type { OcrProgress, OcrResult } from './ocrTypes';
 import type { ImageSize, OcrLine } from './businessRules';
-import { parseBusinessFields } from './businessRules';
+import { getFieldDefinitions, parseBusinessFields, toPercentBBox } from './businessRules';
+import { mergeRankedFieldCandidates, type FieldCandidate } from './fieldCandidates';
+import { preprocessDocumentImage, rotateImageSource } from './imagePreprocessing';
 
 const PADDLE_DETECTION_MODEL = 'PP-OCRv5_mobile_det';
 const PADDLE_RECOGNITION_MODEL = 'PP-OCRv5_mobile_rec';
@@ -196,40 +198,234 @@ export const chooseCompanyNameCandidate = (variantLines: OcrLine[][]): CompanyNa
   })[0] ?? null;
 };
 
-const retryCompanyNameWithRoi = async (
+interface FieldRoi extends CompanyNameRoi { fieldId: string; label: string; aliases: string[] }
+
+const findFieldRoi = (
+  fieldId: string,
+  label: string,
+  aliases: string[],
+  lines: OcrLine[],
+  imageSize: ImageSize,
+): FieldRoi | null => {
+  if (fieldId === 'companyName') {
+    const companyRoi = findCompanyNameRoi(lines, imageSize);
+    return companyRoi ? { ...companyRoi, fieldId, label, aliases } : null;
+  }
+  const aliasMatches = aliases
+    .flatMap((alias) => lines
+      .filter((line) => compactText(line.text).includes(compactText(alias)))
+      .map((line) => ({ line, alias })))
+    .sort((left, right) => compactText(right.alias).length - compactText(left.alias).length
+      || left.line.bbox.y0 - right.line.bbox.y0);
+  const splitMatch = aliases.map(compactText).filter((alias) => alias.length === 2).flatMap((alias) => {
+    const first = lines.find((line) => compactText(line.text).replace(/[：:]/g, '') === alias[0]);
+    if (!first) return [];
+    const firstCenterY = (first.bbox.y0 + first.bbox.y1) / 2;
+    const firstHeight = Math.max(1, first.bbox.y1 - first.bbox.y0);
+    const second = lines.find((line) => line.bbox.x0 > first.bbox.x0
+      && compactText(line.text).startsWith(alias[1])
+      && Math.abs((line.bbox.y0 + line.bbox.y1) / 2 - firstCenterY) <= firstHeight);
+    if (!second) return [];
+    return [{
+      alias,
+      line: {
+        text: `${alias[0]}${second.text}`,
+        confidence: Math.min(first.confidence, second.confidence),
+        bbox: {
+          x0: first.bbox.x0,
+          y0: Math.min(first.bbox.y0, second.bbox.y0),
+          x1: second.bbox.x1,
+          y1: Math.max(first.bbox.y1, second.bbox.y1),
+        },
+      } satisfies OcrLine,
+    }];
+  }).sort((left, right) => left.line.bbox.y0 - right.line.bbox.y0)[0];
+  const match = aliasMatches[0] ?? splitMatch;
+  if (!match) return null;
+  const lineHeight = Math.max(1, match.line.bbox.y1 - match.line.bbox.y0);
+  const text = compactText(match.line.text);
+  const alias = compactText(match.alias);
+  const aliasIndex = text.indexOf(alias);
+  const hasInlineValue = text.slice(aliasIndex + alias.length).replace(/^[：:;；,，.。一—\-]+/, '').length > 0;
+  const inlineStartRatio = (aliasIndex + alias.length) / Math.max(1, text.length);
+  const proposedX = hasInlineValue
+    ? match.line.bbox.x0 + (match.line.bbox.x1 - match.line.bbox.x0) * inlineStartRatio - lineHeight * 0.35
+    : match.line.bbox.x1 - lineHeight * 0.2;
+  const x = Math.max(0, Math.min(imageSize.width - 1, proposedX));
+  const y = Math.max(0, match.line.bbox.y0 - lineHeight * 0.65);
+  const rightMargin = Math.max(8, imageSize.width * 0.02);
+  const width = Math.max(1, imageSize.width - x - rightMargin);
+  const rowMultiplier = fieldId === 'address' ? 4.2 : 2.5;
+  const height = Math.max(1, Math.min(imageSize.height - y, lineHeight * rowMultiplier));
+  const scale = Math.max(2.2, Math.min(4, 68 / lineHeight));
+  return width >= lineHeight * 2 && height >= lineHeight ? {
+    fieldId, label, aliases, x, y, width, height, scale,
+  } : null;
+};
+
+const createFieldRoiCanvases = (image: HTMLImageElement, roi: FieldRoi) =>
+  createCompanyNameRoiCanvases(image, roi);
+
+const PARTIAL_LABEL_PATTERNS: Record<string, RegExp> = {
+  uscc: /^(?:统一)?(?:社会)?(?:信用)?代码/,
+  companyName: /^(?:企业)?名?称/,
+  companyType: /^(?:市场主体|企业)?类?型/,
+  legalPerson: /^(?:法定)?代?表?人|^法人/,
+  regCapital: /^(?:原)?(?:注册)?资?本/,
+  establishDate: /^(?:成立|设立)?日?期/,
+  changeDate: /^(?:变更|申请)?日?期/,
+  address: /^(?:注册)?住?所(?:地址)?/,
+};
+
+const stripFieldLabel = (fieldId: string, value: string, aliases: string[]) => {
+  let cleaned = value.trim();
+  for (const alias of [...aliases].sort((left, right) => right.length - left.length)) {
+    cleaned = cleaned.replace(new RegExp(`^(?:${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})[：:;；,，.。一—\\-\\s]*`), '');
+  }
+  cleaned = cleaned.replace(PARTIAL_LABEL_PATTERNS[fieldId] ?? /$^/, '');
+  return cleaned.replace(/^[：:;；,，.。一—\-\s]+/, '').replace(/[\s　]/g, '').trim();
+};
+
+const linesToFieldCandidates = (
+  roi: FieldRoi,
+  variantLines: OcrLine[][],
+  imageSize: ImageSize,
+): Omit<FieldCandidate, 'score'>[] => {
+  const allAliases = getFieldDefinitions('ACCOUNT_CANCEL').flatMap((definition) => definition.aliases);
+  const boundaryLabels = [...allAliases, '经营范围', '营业期限', '登记机关', '发照日期', '登记状态'];
+  const candidates: Omit<FieldCandidate, 'score'>[] = [];
+  for (const lines of variantLines) {
+    const ordered = [...lines].sort((left, right) => left.bbox.y0 - right.bbox.y0 || left.bbox.x0 - right.bbox.x0);
+    const usable = ordered.filter((line) => {
+      const text = compactText(line.text);
+      if (roi.fieldId === 'address' && /日期|范围|资本|代表人|信用代码|名称/.test(text)) return false;
+      return !boundaryLabels.some((alias) => !roi.aliases.includes(alias) && text.startsWith(compactText(alias)));
+    });
+    const firstLine = usable[0];
+    const firstLineCenter = firstLine ? (firstLine.bbox.y0 + firstLine.bbox.y1) / 2 : 0;
+    const firstLineHeight = firstLine ? Math.max(1, firstLine.bbox.y1 - firstLine.bbox.y0) : 1;
+    const joinable = roi.fieldId === 'address'
+      ? usable.slice(0, 2)
+      : usable.filter((line) => Math.abs((line.bbox.y0 + line.bbox.y1) / 2 - firstLineCenter) <= firstLineHeight);
+    const rawValues = [
+      ...usable.map((line) => ({ value: stripFieldLabel(roi.fieldId, line.text, roi.aliases), lines: [line] })),
+      ...(joinable.length > 1 ? [{
+        value: stripFieldLabel(roi.fieldId, joinable.map((line) => line.text).join(''), roi.aliases),
+        lines: joinable,
+      }] : []),
+    ];
+    for (const raw of rawValues) {
+      if (!raw.value) continue;
+      const bbox = raw.lines.reduce((box, line) => ({
+        x0: Math.min(box.x0, line.bbox.x0),
+        y0: Math.min(box.y0, line.bbox.y0),
+        x1: Math.max(box.x1, line.bbox.x1),
+        y1: Math.max(box.y1, line.bbox.y1),
+      }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+      const mappedBbox = {
+        x0: roi.x + bbox.x0 / roi.scale,
+        y0: roi.y + bbox.y0 / roi.scale,
+        x1: roi.x + bbox.x1 / roi.scale,
+        y1: roi.y + bbox.y1 / roi.scale,
+      };
+      candidates.push({
+        value: raw.value,
+        confidence: raw.lines.reduce((sum, line) => sum + line.confidence, 0) / raw.lines.length / 100,
+        pass: 'ROI_RETRY',
+        bbox: toPercentBBox(mappedBbox, imageSize),
+      });
+    }
+  }
+  return candidates;
+};
+
+const retryAllFieldsWithRoi = async (
   worker: PaddleWorker,
   image: HTMLImageElement,
   lines: OcrLine[],
   imageSize: ImageSize,
   sceneId: SceneType,
+  fields: Record<string, FieldItem>,
   confidenceThreshold: number,
-): Promise<FieldItem | null> => {
-  const roi = findCompanyNameRoi(lines, imageSize);
-  if (!roi) return null;
-
-  const canvases = createCompanyNameRoiCanvases(image, roi);
-  const results = await worker.predict(canvases);
-  const candidate = chooseCompanyNameCandidate(results.map((result) => paddleItemsToLines(result.items)));
-  if (!candidate) return null;
-
-  const mappedLine: OcrLine = {
-    ...candidate.line,
-    text: `名称：${candidate.value}`,
-    bbox: {
-      x0: roi.x + candidate.line.bbox.x0 / roi.scale,
-      y0: roi.y + candidate.line.bbox.y0 / roi.scale,
-      x1: roi.x + candidate.line.bbox.x1 / roi.scale,
-      y1: roi.y + candidate.line.bbox.y1 / roi.scale,
-    },
-  };
-  const parsed = parseBusinessFields(
-    sceneId,
-    [mappedLine],
-    mappedLine.text,
+) => {
+  const definitions = getFieldDefinitions(sceneId);
+  const rois = definitions.map((definition) => findFieldRoi(
+    definition.id,
+    definition.label,
+    definition.aliases,
+    lines,
     imageSize,
-    confidenceThreshold,
-  ).companyName;
-  return parsed?.value ? { ...parsed, ocrEngine: 'PADDLEOCR_JS', ocrPass: 'ROI_RETRY' } : null;
+  )).filter((roi): roi is FieldRoi => Boolean(roi));
+  if (rois.length === 0) return { fields, refinedFieldIds: [] as string[], conflictedFieldIds: [] as string[] };
+  const canvases = rois.flatMap((roi) => createFieldRoiCanvases(image, roi));
+  const results = await worker.predict(canvases);
+  const nextFields = { ...fields };
+  const refinedFieldIds: string[] = [];
+  const conflictedFieldIds: string[] = [];
+  rois.forEach((roi, roiIndex) => {
+    const variantLines = results.slice(roiIndex * 2, roiIndex * 2 + 2)
+      .map((result) => paddleItemsToLines(result.items));
+    const candidates = linesToFieldCandidates(roi, variantLines, imageSize);
+    if (candidates.length === 0 || !nextFields[roi.fieldId]) return;
+    const merged = mergeRankedFieldCandidates(
+      sceneId,
+      nextFields[roi.fieldId],
+      candidates,
+      confidenceThreshold,
+    );
+    nextFields[roi.fieldId] = merged;
+    refinedFieldIds.push(roi.fieldId);
+    if (merged.status === 'CONFLICT') conflictedFieldIds.push(roi.fieldId);
+  });
+  return { fields: nextFields, refinedFieldIds, conflictedFieldIds };
+};
+
+const pageResultScore = (
+  sceneId: SceneType,
+  lines: OcrLine[],
+  fields: Record<string, FieldItem>,
+) => {
+  const filled = Object.values(fields).filter((field) => field.value.trim()).length;
+  const valid = Object.values(fields).filter((field) => field.status !== 'MISSING' && field.status !== 'CONFLICT').length;
+  const horizontalLines = lines.filter((line) => line.bbox.x1 - line.bbox.x0 >= line.bbox.y1 - line.bbox.y0).length;
+  return filled * 100 + valid * 30 + Math.min(60, lines.length * 2)
+    + horizontalLines * 2 + (filled / Math.max(1, getFieldDefinitions(sceneId).length)) * 80;
+};
+
+interface PredictedPage {
+  imageSource: string;
+  image: HTMLImageElement;
+  lines: OcrLine[];
+  imageSize: ImageSize;
+  fields: Record<string, FieldItem>;
+  rawText: string;
+  rotation: 0 | 90 | 180 | 270;
+}
+
+const predictPage = async (
+  worker: PaddleWorker,
+  imageSource: string,
+  sceneId: SceneType,
+  confidenceThreshold: number,
+  rotation: 0 | 90 | 180 | 270,
+): Promise<PredictedPage> => {
+  const rotatedSource = await rotateImageSource(imageSource, rotation);
+  const image = new Image();
+  image.src = rotatedSource;
+  await image.decode();
+  const [result] = await worker.predict(image);
+  if (!result) throw new Error('本地智能识别未返回结果');
+  const lines = paddleItemsToLines(result.items);
+  const rawText = lines.map((line) => line.text).join('\n').trim();
+  return {
+    imageSource: rotatedSource,
+    image,
+    lines,
+    imageSize: result.image,
+    fields: parseBusinessFields(sceneId, lines, rawText, result.image, confidenceThreshold),
+    rawText,
+    rotation,
+  };
 };
 
 export const processPaddleImageOcr = async (
@@ -239,82 +435,79 @@ export const processPaddleImageOcr = async (
   onProgress?: (progress: OcrProgress) => void,
 ): Promise<OcrResult> => {
   try {
-    const image = new Image();
-    image.src = imageSource;
     const workerPromise = getPaddleWorker(onProgress);
-    await image.decode();
+    onProgress?.({ status: 'normalizing document image', progress: 0.16 });
+    const preprocessed = await preprocessDocumentImage(imageSource);
     const worker = await workerPromise;
 
     onProgress?.({ status: 'running paddle ocr', progress: 0.4 });
-    const [result] = await worker.predict(image);
-    onProgress?.({ status: 'parsing paddle result', progress: 0.82 });
-
-    if (!result) throw new Error('PaddleOCR.js 未返回识别结果');
-    const lines = paddleItemsToLines(result.items);
-    const rawText = lines.map((line) => line.text).join('\n').trim();
-    if (!rawText) throw new Error('图像中未识别到可用文字，请检查清晰度、方向和遮挡情况');
-
-    const averageConfidence = lines.length > 0
-      ? lines.reduce((sum, line) => sum + line.confidence, 0) / lines.length / 100
+    let page = await predictPage(worker, preprocessed.imageSource, sceneId, confidenceThreshold, 0);
+    const expectedFieldCount = getFieldDefinitions(sceneId).length;
+    const initialFilledCount = Object.values(page.fields).filter((field) => field.value.trim()).length;
+    const initialHorizontalRatio = page.lines.length
+      ? page.lines.filter((line) => line.bbox.x1 - line.bbox.x0 >= line.bbox.y1 - line.bbox.y0).length / page.lines.length
       : 0;
-
-    const fields = parseBusinessFields(sceneId, lines, rawText, result.image, confidenceThreshold);
-    let refinedFieldIds: string[] | undefined;
-    const companyNameNeedsRefinement = !fields.companyName?.value.trim()
-      || fields.companyName.bbox.height < 3.5;
-    if (companyNameNeedsRefinement) {
-      onProgress?.({ status: 'retrying company name region', progress: 0.86 });
-      const refinedCompanyName = await retryCompanyNameWithRoi(
-        worker,
-        image,
-        lines,
-        result.image,
-        sceneId,
-        confidenceThreshold,
-      );
-      if (refinedCompanyName) {
-        const fullPageCompanyName = fields.companyName;
-        const normalizedFullPageValue = compactText(fullPageCompanyName?.value ?? '');
-        const normalizedRefinedValue = compactText(refinedCompanyName.value);
-        if (normalizedFullPageValue && normalizedFullPageValue !== normalizedRefinedValue) {
-          const preferRefined = refinedCompanyName.confidence >= fullPageCompanyName.confidence;
-          const primary = preferRefined ? refinedCompanyName : fullPageCompanyName;
-          const alternative = preferRefined ? fullPageCompanyName : refinedCompanyName;
-          fields.companyName = {
-            ...primary,
-            status: 'CONFLICT',
-            ruleMessage: `全图识别结果为“${fullPageCompanyName.value}”，名称区域增强结果为“${refinedCompanyName.value}”，请对照原图确认`,
-            ocrAlternatives: [{
-              engine: 'PADDLEOCR_JS',
-              value: alternative.value,
-              confidence: alternative.confidence,
-              pass: alternative.ocrPass ?? 'FULL_PAGE',
-            }],
-          };
-        } else {
-          fields.companyName = refinedCompanyName;
-        }
-        refinedFieldIds = ['companyName'];
+    if (initialFilledCount < Math.max(2, Math.ceil(expectedFieldCount * 0.75))
+      || page.lines.length < 6 || initialHorizontalRatio < 0.65) {
+      onProgress?.({ status: 'checking document orientation', progress: 0.56 });
+      const orientationCandidates: PredictedPage[] = [];
+      for (const rotation of [180, 90, 270] as const) {
+        orientationCandidates.push(await predictPage(
+          worker,
+          preprocessed.imageSource,
+          sceneId,
+          confidenceThreshold,
+          rotation,
+        ));
       }
+      page = [page, ...orientationCandidates].sort((left, right) =>
+        pageResultScore(sceneId, right.lines, right.fields) - pageResultScore(sceneId, left.lines, left.fields))[0];
     }
+    if (!page.rawText) throw new Error('图像中未识别到可用文字，请检查清晰度、方向和遮挡情况');
+    onProgress?.({ status: 'retrying key field regions', progress: 0.78 });
+    const refined = await retryAllFieldsWithRoi(
+      worker,
+      page.image,
+      page.lines,
+      page.imageSize,
+      sceneId,
+      page.fields,
+      confidenceThreshold,
+    );
+    const averageConfidence = page.lines.length > 0
+      ? page.lines.reduce((sum, line) => sum + line.confidence, 0) / page.lines.length / 100
+      : 0;
+    const qualityBlocksAutoPass = preprocessed.quality.issues.some((issue) =>
+      issue === 'BLURRY' || issue === 'LOW_RESOLUTION');
     // 预留最后 10% 给路由层的跨引擎补缺/交叉核验。
     onProgress?.({ status: 'paddle ocr complete', progress: 0.9 });
     return {
       fields: Object.fromEntries(
-        Object.entries(fields).map(([id, field]) => [id, {
+        Object.entries(refined.fields).map(([id, field]) => [id, {
           ...field,
           ocrEngine: 'PADDLEOCR_JS' as const,
           ocrPass: field.ocrPass ?? 'FULL_PAGE' as const,
+          ...(qualityBlocksAutoPass && field.status === 'PASSED' ? {
+            status: 'REVIEW' as const,
+            ruleMessage: `图片${preprocessed.quality.issues.includes('BLURRY') ? '清晰度' : '分辨率'}不足，已拦截自动通过，请对照原图确认`,
+          } : {}),
         }]),
       ),
-      rawText,
+      rawText: page.rawText,
       averageConfidence,
       engine: 'PADDLEOCR_JS',
-      refinedFieldIds,
+      refinedFieldIds: refined.refinedFieldIds,
+      conflictedFieldIds: refined.conflictedFieldIds,
+      processedImageSource: page.imageSource,
+      imageQuality: preprocessed.quality,
+      correctionSummary: [
+        ...preprocessed.correctionSummary,
+        ...(page.rotation ? [`已自动纠正 ${page.rotation}° 文档方向`] : []),
+      ],
     };
   } catch (error) {
     paddleWorkerPromise = null;
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`PaddleOCR.js 执行失败：${message}`);
+    throw new Error(`本地智能识别执行失败：${message}`);
   }
 };

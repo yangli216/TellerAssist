@@ -11,7 +11,7 @@ export interface ImageSize {
   height: number;
 }
 
-interface FieldDefinition {
+export interface FieldDefinition {
   id: string;
   label: string;
   aliases: string[];
@@ -66,6 +66,7 @@ const licenseFields: FieldDefinition[] = [
     validate: usccValidator,
   },
   { id: 'companyName', label: '企业名称', aliases: ['名称', '企业名称', '变更后企业名称'], requiresManualConfirmation: true, validate: required('企业名称', 4) },
+  { id: 'companyType', label: '企业类型', aliases: ['类型', '企业类型', '市场主体类型'], requiresManualConfirmation: true, validate: required('企业类型', 2) },
   { id: 'legalPerson', label: '法定代表人', aliases: ['法定代表人', '法人', '新任法定代表人'], requiresManualConfirmation: true, validate: required('法定代表人', 2) },
   { id: 'regCapital', label: '注册资本', aliases: ['注册资本', '原注册资本'], requiresManualConfirmation: true, validate: required('注册资本', 2) },
   { id: 'establishDate', label: '成立日期', aliases: ['成立日期', '设立日期'], validate: dateValidator },
@@ -138,7 +139,7 @@ const findSameRowValueLine = (labelLine: OcrLine, lines: OcrLine[]): OcrLine | u
     .sort((left, right) => left.bbox.x0 - right.bbox.x0)[0];
 };
 
-const toPercentBBox = (bbox: OcrLine['bbox'], imageSize: ImageSize): BBox => ({
+export const toPercentBBox = (bbox: OcrLine['bbox'], imageSize: ImageSize): BBox => ({
   x: Math.max(0, Math.min(100, (bbox.x0 / imageSize.width) * 100)),
   y: Math.max(0, Math.min(100, (bbox.y0 / imageSize.height) * 100)),
   width: Math.max(0.5, Math.min(100, ((bbox.x1 - bbox.x0) / imageSize.width) * 100)),
@@ -192,6 +193,29 @@ const extractFieldValue = (
 
       const nextLine = lines.slice(index + 1).find((candidate) => compact(candidate.text).length > 0);
       if (nextLine) return { value: cleanExtractedValue(nextLine.text), line: nextLine };
+    }
+  }
+
+  // 新版证照的“名 称 / 类 型 / 住 所”经常被检测成两个独立框。
+  // 对两字标签按同行几何关系拼接，值可能紧跟在第二个字后面。
+  for (const alias of definition.aliases.map(compact).filter((value) => value.length === 2)) {
+    const first = lines.find((line) => compact(line.text).replace(/[：:]/g, '') === alias[0]);
+    if (!first) continue;
+    const firstCenterY = (first.bbox.y0 + first.bbox.y1) / 2;
+    const firstHeight = Math.max(1, first.bbox.y1 - first.bbox.y0);
+    const second = lines.find((line) => {
+      const text = compact(line.text);
+      const centerY = (line.bbox.y0 + line.bbox.y1) / 2;
+      return line.bbox.x0 > first.bbox.x0 && text.startsWith(alias[1])
+        && Math.abs(centerY - firstCenterY) <= firstHeight;
+    });
+    if (!second) continue;
+    const inlineValue = cleanExtractedValue(compact(second.text).slice(1));
+    if (inlineValue) return { value: inlineValue, line: cropLineToValue(second, inlineValue) };
+    const sameRowValue = findSameRowValueLine(second, lines);
+    if (sameRowValue) {
+      const value = cleanExtractedValue(sameRowValue.text);
+      return { value, line: cropLineToValue(sameRowValue, value) };
     }
   }
 

@@ -23,6 +23,7 @@ describe('营业执照字段解析', () => {
   const lines = [
     line('统一社会信用代码：911101085923662400', 98, 100),
     line('名 称：北京测试科技有限公司', 97, 150),
+    line('类 型：有限责任公司（自然人独资）', 97, 175),
     line('法定代表人：王晓明', 96, 200),
     line('注册资本：伍佰万元整', 95, 250),
     line('成立日期：2018年11月08日', 94, 300),
@@ -40,6 +41,7 @@ describe('营业执照字段解析', () => {
 
     expect(fields.uscc.value).toBe('911101085923662400');
     expect(fields.companyName.value).toBe('北京测试科技有限公司');
+    expect(fields.companyType.value).toBe('有限责任公司（自然人独资）');
     expect(fields.legalPerson.value).toBe('王晓明');
     expect(fields.establishDate.status).toBe('PASSED');
     expect(fields.address.bbox.y).toBe(35);
@@ -94,6 +96,20 @@ describe('营业执照字段解析', () => {
 
     expect(fields.companyName.value).toBe('悦动科技有限公司');
     expect(fields.companyName.bbox.x).toBe(13);
+  });
+
+  it('两字标签被拆成两个框时从第二个框提取行内值', () => {
+    const splitLines: OcrLine[] = [
+      { text: '类', confidence: 95, bbox: { x0: 30, y0: 210, x1: 50, y1: 235 } },
+      { text: '型：有限责任公司（自然人独资）', confidence: 94, bbox: { x0: 75, y0: 208, x1: 420, y1: 237 } },
+    ];
+    const fields = parseBusinessFields(
+      'ACCOUNT_CANCEL',
+      splitLines,
+      splitLines.map((item) => item.text).join('\n'),
+      { width: 1000, height: 1000 },
+    );
+    expect(fields.companyType.value).toBe('有限责任公司（自然人独资）');
   });
 });
 
